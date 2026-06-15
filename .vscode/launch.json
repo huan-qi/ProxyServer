@@ -1,0 +1,47 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "g++.exe - 生成和调试活动文件",   //lauch 的名字
+            "type": "cppdbg",                       //类型
+            "request": "launch",
+            "program": "${workspaceFolder}/.build/Debug/bin/ProxyServer.exe",   //需要调试的程序，需要包含调试信息。
+            "args": [],                                  //调试程序时候输入的参数。
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",                 //进入的目录
+            "environment": [],
+            "externalConsole": true,
+            "MIMode": "gdb",                                                                                  //调试器类型
+            "miDebuggerPath": "D:/msys64/ucrt64/bin/gdb.exe",   //调试器路径
+            "setupCommands": [
+                {
+                    "description": "为 gdb 启用整齐打印",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ],
+            "preLaunchTask": "build(Debug)"   //对应 task.json 中的 label
+        },
+        {
+            "name": "g++.exe - 生成和调试活动文件(Release)",   //lauch 的名字
+            "type": "cppdbg",                       //类型
+            "request": "launch",
+            "program": "${workspaceFolder}/.build/Release/bin/ProxyServer.exe",   //需要调试的程序，需要包含调试信息。
+            "args": [],                                  //调试程序时候输入的参数。
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",                 //进入的目录
+            "environment": [],
+            "externalConsole": true,
+            "MIMode": "gdb",                                                                                  //调试器类型
+            "miDebuggerPath": "D:/msys64/ucrt64/bin/gdb.exe",   //调试器路径
+            "setupCommands": [
+                {
+                    "description": "为 gdb 启用整齐打印",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ],
+            "preLaunchTask": "build(Release)"   //对应 task.json 中的 label
+        }
+    ]
+}
