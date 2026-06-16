@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.22)
+cmake_minimum_required(VERSION 3.27)
 
 project(ProxyServer)
 
@@ -23,7 +23,9 @@ find_package(Boost CONFIG REQUIRED COMPONENTS system)
 find_package(spdlog CONFIG REQUIRED)
 
 target_link_libraries(${PROJECT_NAME} PRIVATE Boost::system iphlpapi ws2_32 spdlog::spdlog)
-
+if (WIN32)
+    target_link_libraries(${PROJECT_NAME} PRIVATE iphlpapi ws2_32)
+endif()
 
 # include(GNUInstallDirs)
 

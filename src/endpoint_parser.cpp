@@ -1,15 +1,18 @@
 #include "endpoint_parser.h"
 
-#include <winsock2.h>
-#include <windows.h>
-#include <iphlpapi.h>
-#include <ws2tcpip.h>
-#include <algorithm>
-
-#include <cstdint>
-#include <iostream>
-#include <string>
-#include <vector>
+#ifdef _WIN32
+#  ifndef WIN32_LEAN_AND_MEAN
+#    define WIN32_LEAN_AND_MEAN
+#  endif
+#  include <iphlpapi.h>
+#  include <winsock2.h>
+#  include <ws2tcpip.h>
+#else
+#  include <arpa/inet.h>
+#  include <ifaddrs.h>
+#  include <net/if.h>
+#  include <netinet/in.h>
+#endif
 
 namespace proxy
 {
@@ -22,27 +25,29 @@ tcp::endpoint endpoint_parser::parse()
     return tcp::endpoint{address, port};
 }
 
-std::vector<LocalIpv4> endpoint_parser::get_connectable_endpoint()
+std::vector<address_v4> endpoint_parser::get_lan_ipv4_addresses()
 {
-    std::vector<LocalIpv4> result;
+    std::vector<address_v4> result;
 
-    ULONG flags =
-        GAA_FLAG_SKIP_ANYCAST |
-        GAA_FLAG_SKIP_MULTICAST |
-        GAA_FLAG_SKIP_DNS_SERVER;
+#ifdef _WIN32
 
-    ULONG size = 16 * 1024;
-    std::vector<unsigned char> buffer(size);
+    ULONG flags = GAA_FLAG_SKIP_ANYCAST |
+                  GAA_FLAG_SKIP_MULTICAST |
+                  GAA_FLAG_SKIP_DNS_SERVER;
+
+    ULONG buffer_size = 15 * 1024;
+
+    std::vector<unsigned char> buffer(buffer_size);
 
     IP_ADAPTER_ADDRESSES* adapters = reinterpret_cast<IP_ADAPTER_ADDRESSES*>(buffer.data());
 
-    ULONG ret = GetAdaptersAddresses(AF_INET, flags, nullptr, adapters, &size);
+    ULONG ret = GetAdaptersAddresses(AF_INET, flags, nullptr, adapters, &buffer_size);
 
     if (ret == ERROR_BUFFER_OVERFLOW) 
     {
-        buffer.resize(size);
+        buffer.resize(buffer_size);
         adapters = reinterpret_cast<IP_ADAPTER_ADDRESSES*>(buffer.data());
-        ret = GetAdaptersAddresses(AF_INET, flags, nullptr, adapters, &size);
+        ret = GetAdaptersAddresses(AF_INET, flags, nullptr, adapters, &buffer_size);
     }
 
     if (ret != NO_ERROR) 
@@ -50,117 +55,144 @@ std::vector<LocalIpv4> endpoint_parser::get_connectable_endpoint()
         return result;
     }
 
-    std::vector<std::string> virtual_keywords = {
-        "virtual",
-        "vmware",
-        "virtualbox",
-        "hyper-v",
-        "docker",
-        "wsl",
-        "tap",
-        "tun",
-        "vpn",
-        "tailscale",
-        "zerotier",
-        "loopback"
-    };
-
-    for (auto* adapter = adapters; adapter != nullptr; adapter = adapter->Next) {
-        if (adapter->OperStatus != IfOperStatusUp) {
+    for (auto* adapter = adapters; adapter != nullptr; adapter = adapter->Next) 
+    {
+        if (adapter->OperStatus != IfOperStatusUp) 
+        {
             continue;
         }
 
-        if (adapter->IfType == IF_TYPE_SOFTWARE_LOOPBACK ||
-            adapter->IfType == IF_TYPE_TUNNEL ||
-            adapter->IfType == IF_TYPE_PPP) {
+        if (adapter->IfType == IF_TYPE_SOFTWARE_LOOPBACK) 
+        {
             continue;
         }
 
-        std::string name = wide_to_utf8(adapter->FriendlyName);
-        std::string desc = wide_to_utf8(adapter->Description);
-        std::string combined = to_lower(name + " " + desc);
-
-        if (contains_any(combined, virtual_keywords)) {
+        if (adapter->IfType == IF_TYPE_TUNNEL) 
+        {
             continue;
         }
 
-        for (auto* addr = adapter->FirstUnicastAddress; addr != nullptr; addr = addr->Next) {
-            if (!addr->Address.lpSockaddr) {
+        std::wstring friendly_name = adapter->FriendlyName ? adapter->FriendlyName : L"";
+
+        std::string adapter_name = adapter->AdapterName ? adapter->AdapterName : "";
+
+        if (is_virtual_interface_name(adapter_name)) 
+        {
+            continue;
+        }
+
+        for (auto* unicast = adapter->FirstUnicastAddress; unicast != nullptr; unicast = unicast->Next) 
+        {
+            auto* sa = unicast->Address.lpSockaddr;
+
+            if (!sa || sa->sa_family != AF_INET) 
+            {
                 continue;
             }
 
-            if (addr->Address.lpSockaddr->sa_family != AF_INET) {
+            auto* addr_in = reinterpret_cast<sockaddr_in*>(sa);
+
+            address_v4 addr(ntohl(addr_in->sin_addr.s_addr));
+
+            if (is_bad_ipv4(addr)) 
+            {
                 continue;
             }
 
-            auto* sockaddr = reinterpret_cast<sockaddr_in*>(addr->Address.lpSockaddr);
-            uint32_t host_ip = ntohl(sockaddr->sin_addr.s_addr);
-
-            if (is_bad_ipv4(host_ip)) {
-                continue;
-            }
-
-            if (!is_private_lan_ipv4(host_ip)) {
-                continue;
-            }
-
-            char ip_buffer[INET_ADDRSTRLEN]{};
-            inet_ntop(AF_INET, &sockaddr->sin_addr, ip_buffer, sizeof(ip_buffer));
-
-            int score = 0;
-
-            if (adapter->IfType == IF_TYPE_IEEE80211) {
-                score += 1000; // Wi-Fi 优先
-            } else if (adapter->IfType == IF_TYPE_ETHERNET_CSMACD) {
-                score += 900;  // 有线网卡
-            }
-
-            score -= static_cast<int>(std::min<ULONG>(adapter->Ipv4Metric, 500));
-
-            result.push_back(LocalIpv4{
-                name,
-                ip_buffer,
-                adapter->IfType,
-                adapter->Ipv4Metric,
-                score
-            });
+            result.push_back(addr);
         }
     }
 
-    std::sort(result.begin(), result.end(), [](const LocalIpv4& a, const LocalIpv4& b) {
-        return a.score > b.score;
-    });
+#else
+
+
+    ifaddrs* ifaddr = nullptr;
+    if (getifaddrs(&ifaddr) == -1) {
+        return result;
+    }
+
+    for (ifaddrs* ifa = ifaddr; ifa != nullptr; ifa = ifa->ifa_next) {
+        if (!ifa->ifa_addr) {
+            continue;
+        }
+
+        if (ifa->ifa_addr->sa_family != AF_INET) {
+            continue;
+        }
+
+        std::string ifname = ifa->ifa_name;
+
+        if (is_virtual_interface_name(ifname)) {
+            continue;
+        }
+
+        unsigned int flags = ifa->ifa_flags;
+
+        if (!(flags & IFF_UP)) {
+            continue;
+        }
+
+        if (flags & IFF_LOOPBACK) {
+            continue;
+        }
+
+#ifdef IFF_RUNNING
+        if (!(flags & IFF_RUNNING)) {
+            continue;
+        }
+#endif
+
+        auto* sa = reinterpret_cast<sockaddr_in*>(ifa->ifa_addr);
+
+        address_v4 addr(ntohl(sa->sin_addr.s_addr));
+
+        if (is_bad_ipv4(addr)) {
+            continue;
+        }
+
+        if (!is_private_ipv4(addr)) {
+            continue;
+        }
+
+        result.push_back(addr);
+    }
+
+    freeifaddrs(ifaddr);
+    
+#endif
 
     return result;
 }
 
-std::string endpoint_parser::wide_to_utf8(const wchar_t* wide_str)
+bool endpoint_parser::is_bad_ipv4(const address_v4& addr)
 {
-    if (!wide_str) return "";
+    auto bytes = addr.to_bytes();
+    address_v4::any();
+    return addr == address_v4::any() ||
+            addr.is_loopback() ||
+            addr.is_multicast() ||
+            (bytes[0] == 0) || 
+            (bytes[0] == 127) || 
+            (bytes[0] == 169 && bytes[1] == 254);
 
-    int size = WideCharToMultiByte(CP_UTF8, 0, wide_str, -1, nullptr, 0, nullptr, nullptr);
-
-    if (size <= 0) return "";
-
-    std::string result(size - 1, '\0');
-    WideCharToMultiByte(CP_UTF8, 0, wide_str, -1, result.data(), size, nullptr, nullptr);
-    return result;
 }
 
-std::string endpoint_parser::to_lower(std::string s)
+bool endpoint_parser::starts_with(const std::string& str, const std::string& prefix)
 {
-    std::transform(s.begin(), s.end(), s.begin(), [] (unsigned char c) 
-    {
-        return static_cast<char>(std::tolower(c));
-    });
-    return s;
+    return str.rfind(prefix, 0) == 0;
 }
 
-bool endpoint_parser::contains_any(const std::string& s, const std::vector<std::string>& words)
+bool endpoint_parser::is_virtual_interface_name(const std::string& name)
 {
-    for (const auto& word : words)
+   static const std::vector<std::string> prefixes = {
+        "lo", "docker", "veth", "br-", "virbr", "vmnet",
+        "tun", "tap", "wg", "tailscale", "zt", "cni",
+        "flannel", "kube"
+    };
+
+    for (const auto& prefix : prefixes) 
     {
-        if (s.find(word) != std::string::npos)
+        if (starts_with(name, prefix))
         {
             return true;
         }
@@ -168,32 +200,6 @@ bool endpoint_parser::contains_any(const std::string& s, const std::vector<std::
     return false;
 }
 
-bool endpoint_parser::is_private_lan_ipv4(uint32_t host_order_ip)
-{
-    // 10.0.0.0/8
-    if ((host_order_ip & 0xFF000000) == 0x0A000000) return true;
 
-    // 172.16.0.0/12
-    if ((host_order_ip & 0xFFF00000) == 0xAC100000) return true;
-
-    // 192.168.0.0/16
-    if ((host_order_ip & 0xFFFF0000) == 0xC0A80000) return true;
-
-    return false;
-}
-
-bool endpoint_parser::is_bad_ipv4(uint32_t host_order_ip)
-{
-    // 0.0.0.0
-    if (host_order_ip == 0) return true;
-
-    // 127.0.0.0/8
-    if ((host_order_ip & 0xFF000000) == 0x7F000000) return true;
-
-    // 169.254.0.0/16 link-local
-    if ((host_order_ip & 0xFFFF0000) == 0xA9FE0000) return true;
-
-    return false;
-}
 
 }

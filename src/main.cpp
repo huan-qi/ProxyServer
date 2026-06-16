@@ -23,11 +23,11 @@ int main(int argc, char** argv)
 
     endpoint_parser ep_parser;
     auto endpoint = ep_parser.parse();
-    auto addresses =  ep_parser.get_connectable_endpoint();
+    auto addresses =  ep_parser.get_lan_ipv4_addresses();
 
     for (auto address : addresses)
     {
-        spdlog::info("Proxy server listening on {}: {}", address.ip, endpoint.port());
+        spdlog::info("Proxy server listening on {}: {}", address.to_string(), endpoint.port());
     }
 
     proxy_server server(endpoint);
