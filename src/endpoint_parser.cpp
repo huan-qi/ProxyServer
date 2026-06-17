@@ -150,10 +150,6 @@ std::vector<address_v4> endpoint_parser::get_lan_ipv4_addresses()
             continue;
         }
 
-        if (!is_private_ipv4(addr)) {
-            continue;
-        }
-
         result.push_back(addr);
     }
 
