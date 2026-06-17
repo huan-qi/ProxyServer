@@ -22,7 +22,7 @@ target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/s
 find_package(Boost CONFIG REQUIRED COMPONENTS system)
 find_package(spdlog CONFIG REQUIRED)
 
-target_link_libraries(${PROJECT_NAME} PRIVATE Boost::system iphlpapi ws2_32 spdlog::spdlog)
+target_link_libraries(${PROJECT_NAME} PRIVATE Boost::system spdlog::spdlog)
 if (WIN32)
     target_link_libraries(${PROJECT_NAME} PRIVATE iphlpapi ws2_32)
 endif()
